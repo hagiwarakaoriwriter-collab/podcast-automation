@@ -1,0 +1,51 @@
+name: Daily Podcast Generation
+
+on:
+  schedule:
+    - cron: '0 21 * * *'   # UTC 21:00 = JST 6:00
+  workflow_dispatch:
+    inputs:
+      date_override:
+        description: '日付を上書きする場合に入力（例: 2026-05-22）'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  generate-podcast:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 をセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: FFmpeg をインストール
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Python ライブラリをインストール
+        run: pip install google-genai google-auth google-auth-oauthlib google-api-python-client pydub requests
+
+      - name: ポッドキャストを生成
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          DATE_OVERRIDE: ${{ inputs.date_override }}
+        run: python main.py
+
+      - name: 途中成果物を git にコミット
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add output/research.json output/script.json researched_versions.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: add podcast artifacts $(date +%Y-%m-%d)"
+          git push

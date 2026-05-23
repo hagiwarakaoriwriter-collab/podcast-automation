@@ -1,0 +1,22 @@
+# 音声ファイル（大容量のため git 管理外）
+output/*.wav
+output/*.mp3
+output/filelist.txt
+
+# Claude Code の作業ファイル
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 環境変数
+.env

@@ -60,7 +60,16 @@ def _call_research_api(model: str, prompt: str, api_key: str) -> str:
             tools=[types.Tool(google_search=types.GoogleSearch())],
         ),
     )
-    return _extract_text(response)
+    text = _extract_text(response)
+    if not text or not text.strip():
+        print(f"[{model}] 空のレスポンスを受け取りました。finish_reason を確認します。")
+        try:
+            fr = response.candidates[0].finish_reason
+            print(f"  finish_reason: {fr}")
+        except Exception:
+            pass
+        raise ValueError("Gemini が空のテキストを返しました")
+    return text
 
 
 def _extract_text(response) -> str:

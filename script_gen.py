@@ -24,13 +24,16 @@ def _call_script_api(model: str, prompt: str, api_key: str) -> str:
         ),
     )
     text = getattr(response, "text", None)
-    if text:
-        return text
-    try:
-        parts = response.candidates[0].content.parts
-        return "".join(p.text for p in parts if getattr(p, "text", None))
-    except Exception:
-        return ""
+    if not text:
+        try:
+            parts = response.candidates[0].content.parts
+            text = "".join(p.text for p in parts if getattr(p, "text", None))
+        except Exception:
+            text = ""
+    if not text or not text.strip():
+        print(f"[{model}] 空のレスポンスを受け取りました")
+        raise ValueError("Gemini が空のテキストを返しました")
+    return text
 
 
 def _with_retry(func, label: str) -> str:

@@ -23,7 +23,14 @@ def _call_script_api(model: str, prompt: str, api_key: str) -> str:
             tools=[types.Tool(google_search=types.GoogleSearch())],
         ),
     )
-    return response.text
+    text = getattr(response, "text", None)
+    if text:
+        return text
+    try:
+        parts = response.candidates[0].content.parts
+        return "".join(p.text for p in parts if getattr(p, "text", None))
+    except Exception:
+        return ""
 
 
 def _with_retry(func, label: str) -> str:

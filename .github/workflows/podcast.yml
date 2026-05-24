@@ -46,6 +46,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
           git add output/research.json output/script.json researched_versions.json 2>/dev/null || true
           git diff --staged --quiet || git commit -m "chore: add podcast artifacts $(date +%Y-%m-%d)"
-          git push
+          git push || true

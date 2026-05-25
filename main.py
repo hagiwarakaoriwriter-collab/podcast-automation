@@ -1,12 +1,12 @@
-"""ポッドキャスト自動生成メインスクリプト"""
+"""ポッドキャスト「経営者の言語化図鑑」自動生成メインスクリプト"""
 
-import json
 import os
+import re
 import sys
 from datetime import datetime, timezone, timedelta
 
-from config import OUTPUT_DIR, TRACKED_VERSIONS_FILE
-from research import get_latest_claude_code_version, load_tracked_versions, save_tracked_version, research_claude_code
+from config import OUTPUT_DIR, PODCAST_TITLE
+from research import research_trending_executive, save_covered_topic
 from script_gen import generate_script
 from tts import generate_audio
 from drive_upload import upload_to_drive
@@ -22,6 +22,11 @@ def get_today_jst() -> str:
     return datetime.now(JST).strftime("%Y-%m-%d")
 
 
+def _sanitize_for_folder(name: str) -> str:
+    """フォルダ名に使えない文字を除去"""
+    return re.sub(r'[\\/:*?"<>|]', "_", name).strip() or "unknown"
+
+
 def main():
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -30,71 +35,65 @@ def main():
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     today = get_today_jst()
-    print(f"=== ポッドキャスト生成開始: {today} ===")
+    print(f"=== 「{PODCAST_TITLE}」生成開始: {today} ===")
 
-    # ── STEP 1: 最新バージョン確認 ────────────────────────────────
+    # ── STEP 1: 今日のトレンド経営者を調査 ────────────────────────────
     try:
-        version, release_body = get_latest_claude_code_version()
-    except Exception as e:
-        print(f"バージョン取得失敗: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    tracked = load_tracked_versions()
-    if version in tracked:
-        print(f"バージョン {version} は調査済みです。スキップします。")
-        sys.exit(0)
-
-    # ── STEP 2: 調査 ────────────────────────────────────────────
-    try:
-        print(f"\n--- STEP 2: バージョン {version} の調査 ---")
-        research_data = research_claude_code(version, release_body, api_key)
+        print(f"\n--- STEP 1: 今日のトレンド経営者を調査 ---")
+        research_data = research_trending_executive(today, api_key)
     except Exception as e:
         print(f"調査失敗: {e}", file=sys.stderr)
-        _commit_partials(version, today, "調査失敗")
+        _log_partials("調査失敗")
         sys.exit(1)
 
-    # ── STEP 3: 台本生成 ─────────────────────────────────────────
+    executive_name = research_data.get("executive_name", "unknown")
+
+    # ── STEP 2: 台本生成 ─────────────────────────────────────────
     try:
-        print(f"\n--- STEP 3: 台本生成 ---")
+        print(f"\n--- STEP 2: 台本生成 ---")
         script_data = generate_script(research_data, api_key)
     except Exception as e:
         print(f"台本生成失敗: {e}", file=sys.stderr)
-        _commit_partials(version, today, "台本生成失敗")
+        _log_partials("台本生成失敗")
         sys.exit(1)
 
-    # ── STEP 4: 音声生成 ─────────────────────────────────────────
+    # ── STEP 3: 音声生成 ─────────────────────────────────────────
     try:
-        print(f"\n--- STEP 4: 音声生成 ---")
+        print(f"\n--- STEP 3: 音声生成 ---")
         script_text = script_data.get("script", "")
         mp3_path = generate_audio(script_text, api_key)
     except Exception as e:
         print(f"音声生成失敗: {e}", file=sys.stderr)
-        _commit_partials(version, today, "音声生成失敗")
+        _log_partials("音声生成失敗")
         sys.exit(1)
 
-    # ── STEP 5: Google Drive アップロード ─────────────────────────
+    # ── STEP 4: Google Drive アップロード ─────────────────────────
     try:
-        print(f"\n--- STEP 5: Google Drive アップロード ---")
-        # Drive 用の認証情報が揃っているか確認
+        print(f"\n--- STEP 4: Google Drive アップロード ---")
         required = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"]
         missing = [k for k in required if not os.environ.get(k)]
         if missing:
             print(f"警告: {missing} が設定されていないため Drive アップロードをスキップします")
         else:
-            link = upload_to_drive(mp3_path, version, today)
+            folder_name = f"{today}_{_sanitize_for_folder(executive_name)}"
+            link = upload_to_drive(mp3_path, folder_name)
             print(f"Drive リンク: {link}")
     except Exception as e:
         print(f"Drive アップロード失敗（MP3 は保存済み）: {e}", file=sys.stderr)
-        _commit_partials(version, today, "Driveアップロード失敗")
+        _log_partials("Driveアップロード失敗")
         sys.exit(1)
 
-    # ── STEP 6: バージョンを調査済みとして記録 ──────────────────────
-    save_tracked_version(version)
-    print(f"\n=== 完了: バージョン {version} のポッドキャストを生成しました ===")
+    # ── STEP 5: 取り上げた経営者・発言を記録 ──────────────────────
+    save_covered_topic({
+        "date": today,
+        "executive_name": executive_name,
+        "statement": research_data.get("statement", ""),
+        "title": script_data.get("title", ""),
+    })
+    print(f"\n=== 完了: 「{script_data.get('title')}」を生成しました ===")
 
 
-def _commit_partials(version: str, date: str, reason: str) -> None:
-    """失敗時でも途中成果物の情報をログ出力する（実際の git commit は Actions ワークフローで行う）"""
+def _log_partials(reason: str) -> None:
     print(f"途中成果物を output/ に保存済み（理由: {reason}）")
     for name in ["research.json", "script.json"]:
         path = f"{OUTPUT_DIR}/{name}"

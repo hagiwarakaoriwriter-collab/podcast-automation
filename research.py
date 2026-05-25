@@ -1,57 +1,50 @@
-"""Claude Code 最新バージョンの変更点を Gemini + Google Search Grounding で調査する"""
+"""今日トレンドの経営者・発言を Gemini + Google Search Grounding で調査する"""
 
 import json
+import os
 import time
-import requests
 from google import genai
 from google.genai import types
 
 from config import (
     RESEARCH_MODEL, RESEARCH_MODEL_FALLBACK,
-    CLAUDE_CODE_RELEASES_URL,
     RETRY_WAIT_SECONDS, MAX_RETRIES,
-    OUTPUT_DIR, TRACKED_VERSIONS_FILE,
+    OUTPUT_DIR, COVERED_TOPICS_FILE,
 )
 
 
-def get_latest_claude_code_version() -> tuple[str, str]:
-    """GitHub Releases API から最新バージョンと変更内容を取得する"""
-    print("GitHub Releases API から Claude Code の最新バージョンを取得中...")
-    headers = {"Accept": "application/vnd.github+json"}
-    response = requests.get(CLAUDE_CODE_RELEASES_URL, headers=headers, timeout=30)
-    response.raise_for_status()
-    releases = response.json()
-    if not releases:
-        raise ValueError("リリース情報が見つかりませんでした")
-    latest = releases[0]
-    version = latest.get("tag_name", "").lstrip("v")
-    body = latest.get("body", "")
-    print(f"最新バージョン: {version}")
-    return version, body
-
-
-def load_tracked_versions() -> list[str]:
-    """調査済みバージョン一覧を読み込む"""
+def load_covered_topics() -> list[dict]:
+    """過去取り上げた経営者・発言の履歴を読み込む"""
     try:
-        with open(TRACKED_VERSIONS_FILE, encoding="utf-8") as f:
+        with open(COVERED_TOPICS_FILE, encoding="utf-8") as f:
             data = json.load(f)
-            return data.get("versions", [])
+            return data.get("topics", [])
     except (FileNotFoundError, json.JSONDecodeError):
         return []
 
 
-def save_tracked_version(version: str) -> None:
-    """調査済みバージョンを記録する"""
-    tracked = load_tracked_versions()
-    if version not in tracked:
-        tracked.append(version)
-    with open(TRACKED_VERSIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump({"versions": tracked}, f, ensure_ascii=False, indent=2)
-    print(f"バージョン {version} を調査済みとして記録しました")
+def save_covered_topic(topic: dict) -> None:
+    """取り上げた経営者・発言を記録する（直近30件まで保持）"""
+    topics = load_covered_topics()
+    topics.append(topic)
+    topics = topics[-30:]  # 直近30件のみ保持
+    with open(COVERED_TOPICS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"topics": topics}, f, ensure_ascii=False, indent=2)
+    print(f"取り上げた経営者: {topic.get('executive_name')} / 発言: {topic.get('statement', '')[:30]}...")
+
+
+def _extract_text(response) -> str:
+    text = getattr(response, "text", None)
+    if not text:
+        try:
+            parts = response.candidates[0].content.parts
+            text = "".join(p.text for p in parts if getattr(p, "text", None))
+        except Exception:
+            text = ""
+    return text or ""
 
 
 def _call_research_api(model: str, prompt: str, api_key: str) -> str:
-    """Gemini + Google Search Grounding で調査を実行する"""
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=model,
@@ -62,7 +55,7 @@ def _call_research_api(model: str, prompt: str, api_key: str) -> str:
     )
     text = _extract_text(response)
     if not text or not text.strip():
-        print(f"[{model}] 空のレスポンスを受け取りました。finish_reason を確認します。")
+        print(f"[{model}] 空のレスポンスを受け取りました")
         try:
             fr = response.candidates[0].finish_reason
             print(f"  finish_reason: {fr}")
@@ -72,20 +65,7 @@ def _call_research_api(model: str, prompt: str, api_key: str) -> str:
     return text
 
 
-def _extract_text(response) -> str:
-    """response.text が None の場合も text part を直接取り出す"""
-    text = getattr(response, "text", None)
-    if text:
-        return text
-    try:
-        parts = response.candidates[0].content.parts
-        return "".join(p.text for p in parts if getattr(p, "text", None))
-    except Exception:
-        return ""
-
-
 def _with_retry(func, label: str) -> str:
-    """429/503 エラーに対してリトライする"""
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             return func()
@@ -98,38 +78,45 @@ def _with_retry(func, label: str) -> str:
                 raise
 
 
-def research_claude_code(version: str, release_body: str, api_key: str) -> dict:
-    """指定バージョンの Claude Code 変更点を調査して research.json を返す"""
-    prompt = f"""Claude Code バージョン {version} の変更点・新機能・改善点について、
-以下のリリースノートを参考にしながら、Google Search で最新情報を検索し、
-ポッドキャストの台本に使える詳細な情報をまとめてください。
+def research_trending_executive(date_str: str, api_key: str) -> dict:
+    """今日のトレンド経営者と象徴的発言を1つ調査して research.json を返す"""
+    covered = load_covered_topics()
+    covered_summary = "\n".join(
+        f"- {t.get('executive_name')}: {t.get('statement', '')[:50]}..."
+        for t in covered[-30:]
+    ) or "（過去履歴なし）"
 
-## リリースノート
-{release_body}
+    prompt = f"""今日（{date_str}）のSNS（X等）・ニュース・最近のインタビュー記事から、
+**今話題になっている経営者**を1人選び、その人の**象徴的な発言を1つ**取り上げてください。
 
-## 調査すること
-- 主要な新機能と使い方
-- バグ修正と改善点
-- 開発者への影響（ユースケース）
-- 技術的な詳細（実装面での変化）
-- ユーザーへの恩恵
+## 選定基準
+- 直近1〜4週間以内のトレンド性のある発言（古すぎる名言は避ける）
+- 経営哲学・組織観・人材観・キャリア観など「言語化」が興味深いもの
+- ジャンルは日替わりで幅広く（IT/製造/小売/スタートアップ/海外含む可）
 
-## 出力形式
-JSON 形式で以下の構造にしてください：
+## 過去に取り上げた経営者・発言（重複を避ける）
+{covered_summary}
+
+## Google Search で調査すること
+- その経営者の最新の発言（X投稿、インタビュー、決算会見、書籍など）
+- 発言の正確な引用
+- 発言の文脈（どんな場面で・誰に向けて・何を意図して）
+- その経営者の経歴・スタイル・ブランディング戦略
+- なぜ今その発言が注目されているか（トレンド背景）
+
+## 出力形式（JSONのみ、Markdownコードブロック不要）
 {{
-  "version": "{version}",
-  "summary": "全体の要約（100文字程度）",
-  "new_features": ["機能1", "機能2", ...],
-  "bug_fixes": ["修正1", "修正2", ...],
-  "improvements": ["改善1", "改善2", ...],
-  "developer_impact": "開発者への影響の説明",
-  "user_benefits": "ユーザーへの恩恵の説明",
-  "technical_details": "技術的な詳細"
-}}
+  "executive_name": "経営者の氏名",
+  "executive_title": "肩書（例: 〇〇株式会社 代表取締役）",
+  "statement": "発言の正確な引用（1〜3文程度）",
+  "source": "発言ソース（例: 2026年5月20日のX投稿、〇〇誌インタビューなど）",
+  "context": "発言の背景・文脈（200〜300字）",
+  "executive_background": "経営者の経歴・ブランディングの特徴（200〜300字）",
+  "trend_relevance": "なぜ今この発言が話題か（150〜200字）",
+  "key_themes": ["テーマ1（例: 人材観）", "テーマ2", "テーマ3"]
+}}"""
 
-JSON のみ出力してください。Markdown コードブロックは不要です。"""
-
-    print(f"バージョン {version} の調査を開始します（モデル: {RESEARCH_MODEL}）")
+    print(f"今日のトレンド経営者を調査中（モデル: {RESEARCH_MODEL}）...")
 
     try:
         text = _with_retry(
@@ -144,21 +131,20 @@ JSON のみ出力してください。Markdown コードブロックは不要で
             label=RESEARCH_MODEL_FALLBACK,
         )
 
-    # JSON 抽出
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
         text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
 
     research_data = json.loads(text)
-    research_data["version"] = version
+    research_data["date"] = date_str
 
-    # output/research.json に保存
-    import os
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     out_path = f"{OUTPUT_DIR}/research.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(research_data, f, ensure_ascii=False, indent=2)
     print(f"調査結果を {out_path} に保存しました")
+    print(f"  経営者: {research_data.get('executive_name')}")
+    print(f"  発言: {research_data.get('statement', '')[:60]}...")
 
     return research_data

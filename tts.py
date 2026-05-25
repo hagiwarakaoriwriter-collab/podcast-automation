@@ -9,8 +9,8 @@ from google import genai
 from google.genai import types
 
 from config import (
-    SPEAKER_MALE, SPEAKER_FEMALE,
-    VOICE_MALE, VOICE_FEMALE,
+    SPEAKER_HOST, SPEAKER_ASSISTANT,
+    VOICE_HOST, VOICE_ASSISTANT,
     TTS_MODEL, TTS_MODEL_FALLBACK,
     TTS_CHUNK_MAX_CHARS,
     RETRY_WAIT_SECONDS, MAX_RETRIES,
@@ -62,18 +62,18 @@ def _build_tts_config() -> types.GenerateContentConfig:
             multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
                 speaker_voice_configs=[
                     types.SpeakerVoiceConfig(
-                        speaker=SPEAKER_MALE,
+                        speaker=SPEAKER_HOST,
                         voice_config=types.VoiceConfig(
                             prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                voice_name=VOICE_MALE
+                                voice_name=VOICE_HOST
                             )
                         ),
                     ),
                     types.SpeakerVoiceConfig(
-                        speaker=SPEAKER_FEMALE,
+                        speaker=SPEAKER_ASSISTANT,
                         voice_config=types.VoiceConfig(
                             prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                voice_name=VOICE_FEMALE
+                                voice_name=VOICE_ASSISTANT
                             )
                         ),
                     ),
